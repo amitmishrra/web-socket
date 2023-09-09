@@ -1,83 +1,49 @@
-const WebSocket = require('ws');
+const express = require('express');
 const http = require('http');
+const socketIo = require('socket.io');
+const cors = require('cors');
 
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('WebSocket server running');
-});
+const app = express();
 
-const wss = new WebSocket.Server({ server });
+const server = http.createServer(app);
+const io = socketIo(server);
+
 const clients = new Map(); // Store connected clients and their usernames
+app.use(cors({ origin: '*' }));
 
-wss.on('connection', (ws) => {
+io.on('connection', (socket) => {
   console.log('A new WebSocket connection established');
 
-  console.log(ws)
-  ws.on('message', (message) => {
-    try {
-      const parsedMessage = JSON.parse(message);
-
-      console.log(message)
-
-      if (parsedMessage.username) {
-        const username = parsedMessage.username;
-
-        // Store the WebSocket connection and username in the clients Map
-        clients.set(ws, { username });
-
-        // Notify other clients about the new user joining
-        broadcastUserList();
-      } else if (parsedMessage.text && parsedMessage.recipient) {
-        // Handle chat messages
-        handleMessage(parsedMessage, ws);
-      }
-    } catch (error) {
-      console.error('Error parsing message:', error);
-    }
+  socket.on('join', (username) => {
+    clients.set(socket.id, { username });
+    broadcastUserList();
   });
 
-  ws.on('close', () => {
+  socket.on('chat message', (message) => {
+    const senderUsername = clients.get(socket.id).username;
+    const { recipient, text } = message;
+
+    io.to(recipient).emit('chat message', {
+      sender: senderUsername,
+      text,
+    });
+  });
+
+  socket.on('disconnect', () => {
     console.log('WebSocket connection closed');
 
-    // Remove the client and username from the Map when they disconnect
-    if (clients.has(ws)) {
-      clients.delete(ws);
-
-      // Notify other clients about the user leaving
+    if (clients.has(socket.id)) {
+      clients.delete(socket.id);
       broadcastUserList();
     }
   });
+
+  function broadcastUserList() {
+    const userList = Array.from(clients.values()).map((client) => client.username);
+    io.emit('user list', userList);
+  }
 });
 
-function broadcastUserList() {
-  const userList = Array.from(clients.values()).map((client) => client.username);
-  const messageData = { userList };
-
-  // Broadcast the updated user list to all connected clients
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(messageData));
-    }
-  });
-}
-
-function handleMessage(messageData, senderWs) {
-  const recipient = messageData.recipient;
-  const text = messageData.text;
-
-  clients.forEach((clientData, clientWs) => {
-    if (clientData.username === recipient && clientWs !== senderWs) {
-      const message = {
-        sender: clients.get(senderWs).username,
-        text,
-      };
-
-      // Send the message to the recipient
-      clientWs.send(JSON.stringify(message));
-    }
-  });
-}
-
 server.listen(3000, () => {
-  console.log('WebSocket server is listening on port 3000');
+  console.log('Socket.io server is listening on port 3000');
 });
